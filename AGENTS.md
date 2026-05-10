@@ -81,6 +81,22 @@ run_agent.py, cli.py, batch_runner.py, environments/
 
 ---
 
+## Subdirectory Documentation
+
+Each major subsystem has its own AGENTS.md with internal architecture, ABCs,
+and extension points not covered here:
+
+| Directory | AGENTS.md | Covers |
+|-----------|-----------|--------|
+| `agent/` | Transport vs adapter layers, 4 ABCs, provider resolution, context flow |
+| `gateway/` | Two-guard message flow, base adapter interface, streaming, agent cache |
+| `tools/` | Registry API, 4 subdirectory architectures, utility modules, MCP naming |
+| `ui-tui/` | Ink fork, nanostores, build pipeline, theming, component conventions |
+| `plugins/` | 5 plugin kinds, 4 discovery systems, plugin.yaml schema, registration surface |
+| `hermes_cli/` | Auth/model/profile subsystems, CLI subcommand pattern, Windows compat |
+
+---
+
 ## AIAgent Class (run_agent.py)
 
 The real `AIAgent.__init__` takes ~60 parameters (credentials, routing, callbacks,
