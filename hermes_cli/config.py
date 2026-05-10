@@ -944,6 +944,25 @@ DEFAULT_CONFIG = {
             "model": "voxtral-mini-tts-2603",
             "voice_id": "c69964a6-ab8b-4f8a-9465-ec0925096ec8",  # Paul - Neutral
         },
+        "minimax": {
+            "api_version": "v2",  # "v1" (legacy text_to_speech) or "v2" (new t2a_v2)
+            "model": "speech-2.8-hd",
+            "voice_id": "male-qn-qingse",  # v1 default voice
+            # "base_url": "",  # Override API endpoint; defaults to v2 or v1 URL based on api_version
+            "voice_setting": {
+                # "voice_id": "",  # Override voice for v2 (uses top-level voice_id if not set)
+                # "speed": 1.0,    # 0.5–2.0
+                # "vol": 1.0,      # 0–10
+                # "pitch": 0,      # -12 to 12
+                # "emotion": "",   # Optional: e.g. "happy", "sad"
+            },
+            "audio_setting": {
+                # "sample_rate": 32000,
+                # "format": "mp3",     # mp3, wav, flac, pcm
+                # "channel": 1,        # 1=mono, 2=stereo
+                # "bitrate": 128000,
+            },
+        },
         "neutts": {
             "ref_audio": "",  # Path to reference voice audio (empty = bundled default)
             "ref_text": "",   # Path to reference voice transcript (empty = bundled default)

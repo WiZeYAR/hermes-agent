@@ -139,6 +139,8 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MINIMAX_MODEL = "speech-01"
 DEFAULT_MINIMAX_VOICE_ID = "female-shaonv"
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.chat/v1/text_to_speech"
+DEFAULT_MINIMAX_MODEL_V2 = "speech-2.8-hd"
+DEFAULT_MINIMAX_BASE_URL_V2 = "https://api.minimax.io/v1/t2a_v2"
 DEFAULT_MISTRAL_TTS_MODEL = "voxtral-mini-tts-2603"
 DEFAULT_MISTRAL_TTS_VOICE_ID = "c69964a6-ab8b-4f8a-9465-ec0925096ec8"  # Paul - Neutral
 DEFAULT_XAI_VOICE_ID = "eve"
@@ -933,16 +935,62 @@ def _generate_xai_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -
     return output_path
 
 
+def _build_minimax_v2_payload(
+    text: str,
+    model: str,
+    voice_setting: Dict[str, Any],
+    audio_setting: Dict[str, Any],
+    top_level_voice_id: str = DEFAULT_MINIMAX_VOICE_ID,
+) -> Dict[str, Any]:
+    """Build the request payload for MiniMax TTS v2 (t2a_v2) API.
+
+    Args:
+        text: Text to synthesize.
+        model: Model name (e.g. "speech-2.8-hd").
+        voice_setting: Voice configuration dict.
+        audio_setting: Audio configuration dict.
+        top_level_voice_id: Fallback voice_id from ``minimax.voice_id`` config.
+
+    Returns:
+        Payload dict ready for JSON serialization.
+    """
+    payload_voice: Dict[str, Any] = {
+        "voice_id": voice_setting.get("voice_id") or top_level_voice_id,
+        "speed": voice_setting.get("speed", 1.0),
+        "vol": voice_setting.get("vol", 1.0),
+        "pitch": voice_setting.get("pitch", 0),
+    }
+    if "emotion" in voice_setting:
+        payload_voice["emotion"] = voice_setting["emotion"]
+    if "timber_weights" in voice_setting:
+        payload_voice["timber_weights"] = voice_setting["timber_weights"]
+
+    payload_audio: Dict[str, Any] = {
+        "sample_rate": audio_setting.get("sample_rate", 32000),
+        "format": audio_setting.get("format", "mp3"),
+        "channel": audio_setting.get("channel", 1),
+        "bitrate": audio_setting.get("bitrate", 128000),
+    }
+    if "force_cbr" in audio_setting:
+        payload_audio["force_cbr"] = audio_setting["force_cbr"]
+
+    return {
+        "model": model,
+        "text": text,
+        "stream": False,
+        "voice_setting": payload_voice,
+        "audio_setting": payload_audio,
+    }
+
+
 # ===========================================================================
 # Provider: MiniMax TTS
 # ===========================================================================
 def _generate_minimax_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
-    """
-    Generate audio using MiniMax TTS API (v1/text_to_speech).
+    """Generate audio using MiniMax TTS API (v1 or v2).
 
-    The current API (api.minimax.chat/v1/text_to_speech) uses a simple payload
-    and returns raw audio bytes directly (Content-Type: audio/mpeg), unlike
-    the deprecated v1/t2a_v2 endpoint which returned JSON with hex-encoded audio.
+    Supports both the original v1/text_to_speech endpoint and the newer
+    v1/t2a_v2 endpoint. Controlled by ``api_version`` in config (default "v2").
 
     Args:
         text: Text to convert (max 10,000 characters).
@@ -959,6 +1007,104 @@ def _generate_minimax_tts(text: str, output_path: str, tts_config: Dict[str, Any
         raise ValueError("MINIMAX_API_KEY not set. Get one at https://platform.minimax.io/")
 
     mm_config = tts_config.get("minimax", {})
+    api_version = mm_config.get("api_version", "v2")
+
+    if api_version == "v2":
+        return _generate_minimax_tts_v2(text, output_path, api_key, mm_config)
+    elif api_version == "v1":
+        return _generate_minimax_tts_v1(text, output_path, api_key, mm_config)
+    else:
+        logger.warning(
+            "Unknown minimax api_version '%s'; expected 'v1' or 'v2'. Falling back to v1.",
+            api_version,
+        )
+        return _generate_minimax_tts_v1(text, output_path, api_key, mm_config)
+
+
+def _generate_minimax_tts_v2(text: str, output_path: str, api_key: str, mm_config: Dict[str, Any]) -> str:
+    """Generate audio using MiniMax TTS v2 (t2a_v2) API.
+
+    The v2 endpoint (api.minimax.io/v1/t2a_v2) accepts a richer payload
+    with voice_setting and audio_setting sub-objects, and returns JSON
+    with hex-encoded audio at data.audio.
+    """
+    import requests
+
+    model = mm_config.get("model", DEFAULT_MINIMAX_MODEL_V2)
+    base_url = mm_config.get("base_url", DEFAULT_MINIMAX_BASE_URL_V2)
+    voice_setting = mm_config.get("voice_setting", {})
+    audio_setting = mm_config.get("audio_setting", {})
+
+    top_level_voice_id = mm_config.get("voice_id", DEFAULT_MINIMAX_VOICE_ID)
+    payload = _build_minimax_v2_payload(
+        text, model, voice_setting, audio_setting,
+        top_level_voice_id=top_level_voice_id,
+    )
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    response = requests.post(base_url, json=payload, headers=headers, timeout=60)
+
+    # v2 always returns JSON
+    try:
+        result = response.json()
+    except Exception:
+        response.raise_for_status()
+        raise RuntimeError(
+            f"MiniMax TTS v2 returned non-JSON response "
+            f"(Content-Type: {response.headers.get('Content-Type', 'unknown')}, "
+            f"{len(response.content)} bytes)"
+        )
+
+    base_resp = result.get("base_resp", {})
+    status_code = base_resp.get("status_code", -1)
+
+    if status_code != 0:
+        status_msg = base_resp.get("status_msg", "unknown error")
+        raise RuntimeError(f"MiniMax TTS v2 API error (code {status_code}): {status_msg}")
+
+    # v2 can return hex-encoded audio or a URL
+    data = result.get("data", {})
+
+    hex_audio = data.get("audio", "")
+    if hex_audio:
+        audio_bytes = bytes.fromhex(hex_audio)
+        with open(output_path, "wb") as f:
+            f.write(audio_bytes)
+        return output_path
+
+    audio_url = data.get("audio_url", "")
+    if audio_url:
+        audio_resp = requests.get(audio_url, timeout=60)
+        audio_resp.raise_for_status()
+        with open(output_path, "wb") as f:
+            f.write(audio_resp.content)
+        return output_path
+
+    raise RuntimeError("MiniMax TTS v2 returned neither audio nor audio_url in response")
+
+
+def _generate_minimax_tts_v1(text: str, output_path: str, api_key: str, mm_config: Dict[str, Any]) -> str:
+    """Generate audio using MiniMax TTS API (v1/text_to_speech).
+
+    The current API (api.minimax.chat/v1/text_to_speech) uses a simple payload
+    and returns raw audio bytes directly (Content-Type: audio/mpeg), unlike
+    the deprecated v1/t2a_v2 endpoint which returned JSON with hex-encoded audio.
+
+    Args:
+        text: Text to convert (max 10,000 characters).
+        output_path: Where to save the audio file.
+        api_key: MINIMAX_API_KEY value.
+        mm_config: minimax sub-dict from tts config.
+
+    Returns:
+        Path to the saved audio file.
+    """
+    import requests
+
     model = mm_config.get("model", DEFAULT_MINIMAX_MODEL)
     voice_id = mm_config.get("voice_id", DEFAULT_MINIMAX_VOICE_ID)
     base_url = mm_config.get("base_url", DEFAULT_MINIMAX_BASE_URL)
